@@ -1,0 +1,345 @@
+version: '3.8'
+
+# Bernardo, Cassio e Enzzo
+# Lab de seguranca de redes
+# Internet -> [honeypot-perimeter] -> exposto direto
+# Internet -> [ext-firewall] -> DMZ -> [int-firewall] -> Rede interna
+
+services:
+
+  # --- Honeypot DMZ (Kippo SSH) ---
+  honeypot-dmz:
+    build:
+      context: ./config/kippo
+      dockerfile: Dockerfile
+    image: kippo-internal:latest
+    container_name: honeypot-dmz
+    hostname: dmz-admin
+    ports:
+      - "2222:2222"
+    environment:
+      - KIPPO_HOSTNAME=dmz-admin
+      - KIPPO_SYSLOG_HOST=10.20.0.40
+      - KIPPO_SYSLOG_PORT=514
+    volumes:
+      - kippo_dmz_logs:/kippo/log
+      - kippo_dmz_dl:/kippo/dl
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.99
+    restart: unless-stopped
+
+  # --- Honeypot interno (Kippo SSH) ---
+  honeypot-internal:
+    build:
+      context: ./config/kippo
+      dockerfile: Dockerfile
+    image: kippo-custom:latest
+    container_name: honeypot-internal
+    hostname: internal-backup
+    environment:
+      - KIPPO_HOSTNAME=internal-backup
+      - KIPPO_SYSLOG_HOST=10.20.0.40
+      - KIPPO_SYSLOG_PORT=514
+    volumes:
+      - kippo_internal_logs:/kippo/log
+      - kippo_internal_dl:/kippo/dl
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.99
+    restart: unless-stopped
+
+  # --- Firewall externo ---
+  ext-firewall:
+    image: alpine
+    container_name: ext-firewall
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "
+        apk add --no-cache iptables ip6tables &&
+        iptables -F && iptables -X &&
+        iptables -P INPUT DROP &&
+        iptables -P FORWARD DROP &&
+        iptables -P OUTPUT ACCEPT &&
+        iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &&
+        iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &&
+        iptables -A FORWARD -p tcp --dport 80 -j ACCEPT &&
+        iptables -A FORWARD -p tcp --dport 443 -j ACCEPT &&
+        iptables -A FORWARD -p tcp --dport 25 -j ACCEPT &&
+        iptables -A FORWARD -p tcp --dport 993 -j ACCEPT &&
+        iptables -A FORWARD -p tcp --dport 587 -j ACCEPT &&
+        iptables -A FORWARD -d 10.10.0.99 -j DROP &&
+        iptables -A FORWARD -d 10.20.0.0/24 -j DROP &&
+        echo '[ext-firewall] regras carregadas.' &&
+        tail -f /dev/null
+      "
+    networks:
+      - default
+      - dmz_net
+    restart: unless-stopped
+
+  # --- Servidor web (DMZ) ---
+  web-server:
+    image: nginx:alpine
+    container_name: web-server
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.10
+    restart: unless-stopped
+
+  # --- Redis para Tanner ---
+  tanner-redis:
+    image: redis:7-alpine
+    container_name: tanner-redis
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.94
+    restart: unless-stopped
+
+  # --- Tanner (backend de analise do Snare) ---
+  tanner:
+    build:
+      context: ./config/tanner
+      dockerfile: Dockerfile
+    container_name: tanner
+    hostname: tanner-api
+    depends_on:
+      - tanner-redis
+    environment:
+      - REDIS_HOST=tanner-redis
+      - REDIS_PORT=6379
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.96
+    restart: unless-stopped
+
+  # --- Snare (honeypot web) ---
+  snare:
+    build:
+      context: ./config/snare
+      dockerfile: Dockerfile
+    container_name: snare
+    hostname: web-corp
+    depends_on:
+      - tanner
+    ports:
+      - "8091:80"
+    environment:
+      - TANNER_HOST=10.10.0.96
+      - SNARE_PORT=80
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.97
+    restart: unless-stopped
+
+  # --- OpenCanary (honeypot multi-protocolo) ---
+  opencanary:
+    build:
+      context: ./config/opencanary
+      dockerfile: Dockerfile
+    container_name: opencanary
+    hostname: srv-files
+    ports:
+      - "2121:21"
+      - "2323:23"
+      - "8888:80"
+      - "33306:3306"
+      - "36379:6379"
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.95
+    restart: unless-stopped
+
+  # --- Servidor de e-mail (DMZ) ---
+  mail-server:
+    image: bytemark/smtp
+    container_name: mail-server
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.0.20
+    restart: unless-stopped
+
+  # --- Firewall interno ---
+  int-firewall:
+    image: alpine
+    container_name: int-firewall
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "
+        apk add --no-cache iptables &&
+        iptables -F && iptables -X &&
+        iptables -P INPUT DROP &&
+        iptables -P FORWARD DROP &&
+        iptables -P OUTPUT ACCEPT &&
+        iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &&
+        iptables -A FORWARD -s 10.10.0.10 -d 10.20.0.30 -p tcp --dport 5432 -j ACCEPT &&
+        iptables -A FORWARD -s 10.10.0.20 -d 10.20.0.30 -p tcp --dport 5432 -j ACCEPT &&
+        iptables -A FORWARD -s 10.20.0.50 -d 10.20.0.10 -p tcp -m multiport --dports 80,443 -j ACCEPT &&
+        iptables -A FORWARD -d 10.20.0.40 -p udp --dport 514 -j ACCEPT &&
+        iptables -A FORWARD -d 10.20.0.40 -p tcp --dport 514 -j ACCEPT &&
+        iptables -A FORWARD -s 10.10.0.0/24 -d 10.20.0.0/24 -j DROP &&
+        echo '[int-firewall] regras carregadas.' &&
+        tail -f /dev/null
+      "
+    networks:
+      - dmz_net
+      - internal_net
+    restart: unless-stopped
+
+  # --- ERP (Odoo 17) ---
+  erp-system:
+    image: odoo:17
+    container_name: erp-system
+    depends_on:
+      - web-db
+    environment:
+      - HOST=web-db
+      - USER=odoo
+      - PASSWORD=odoo_secure_password
+    volumes:
+      - odoo_data:/var/lib/odoo
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.10
+    restart: unless-stopped
+
+  # --- Compartilhamento de arquivos (Samba) ---
+  fileshare:
+    image: dperson/samba:latest
+    container_name: fileshare
+    environment:
+      - USERID=1000
+      - GROUPID=1000
+    command: >
+      -u "alice;alice_password"
+      -u "bob;bob_password"
+      -s "public;/shares/public;yes;no;yes;all;none"
+      -s "private;/shares/private;no;no;no;alice,bob;alice,bob"
+      -p
+    volumes:
+      - smb_public:/shares/public
+      - smb_private:/shares/private
+    ports:
+      - "4445:445"
+      - "139:139"
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.20
+    restart: unless-stopped
+
+  # --- Banco de dados (PostgreSQL 16) ---
+  web-db:
+    image: postgres:16-alpine
+    container_name: web-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_master_password
+      POSTGRES_DB: odoo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.30
+    restart: unless-stopped
+
+  # --- SIEM Wazuh ---
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.3
+    container_name: wazuh-manager
+    hostname: wazuh-manager
+    ports:
+      - "1514:1514/udp"
+      - "1514:1514/tcp"
+      - "1515:1515"
+      - "514:514/udp"
+      - "55000:55000"
+    volumes:
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.40
+    restart: unless-stopped
+
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.3
+    container_name: wazuh-indexer
+    hostname: wazuh-indexer
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.41
+    restart: unless-stopped
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.7.3
+    container_name: wazuh-dashboard
+    hostname: wazuh-dashboard
+    depends_on:
+      - wazuh-indexer
+      - wazuh-manager
+    ports:
+      - "8080:5601"
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.42
+    restart: unless-stopped
+
+  # --- Workstation ---
+  workstation:
+    image: alpine
+    container_name: workstation
+    command: >
+      sh -c "
+        apk add --no-cache curl wget busybox-extras &&
+        tail -f /dev/null
+      "
+    networks:
+      internal_net:
+        ipv4_address: 10.20.0.50
+    restart: unless-stopped
+
+networks:
+  dmz_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.1
+
+  internal_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.20.0.0/24
+          gateway: 10.20.0.1
+
+volumes:
+  kippo_perimeter_logs:
+  kippo_perimeter_dl:
+  kippo_dmz_logs:
+  kippo_dmz_dl:
+  kippo_internal_logs:
+  kippo_internal_dl:
+  odoo_data:
+  smb_public:
+  smb_private:
+  postgres_data:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_indexer_data:
+  opencanary_logs:
