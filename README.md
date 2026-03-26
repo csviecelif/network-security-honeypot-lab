@@ -135,7 +135,3 @@ http://localhost:8080
     └── opencanary/
         ├── Dockerfile
         └── opencanary.conf
-
-## Disclaimer
-
-This environment is intentionally vulnerable. Do not expose any ports to the public internet. Intended for local lab and research use only.
