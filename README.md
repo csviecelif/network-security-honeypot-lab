@@ -86,8 +86,6 @@ ssh -o StrictHostKeyChecking=no \
     root@10.10.0.99 -p 2222
 # password: root
 
-```
-
 Kippo accepts the connection and logs everything — credentials tried, commands run, files downloaded.
 
 ---
@@ -108,9 +106,7 @@ docker logs tanner
 
 ## Wazuh dashboard
 
-```
-http://localhost:8080 
-```
+http://localhost:8080
 
 ---
 
