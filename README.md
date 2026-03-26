@@ -116,7 +116,6 @@ http://localhost:8080
 
 ## Project structure
 
-```
 .
 ├── docker-compose.yml
 └── config/
@@ -136,8 +135,6 @@ http://localhost:8080
     └── opencanary/
         ├── Dockerfile
         └── opencanary.conf
-        
----
 
 ## Disclaimer
 
