@@ -1,3 +1,5 @@
+# network-security-honeypot-lab
+
 A Docker-based network security lab simulating a corporate infrastructure with multiple honeypot layers, segmented firewalls, and a SIEM. Built to study attacker behavior using production-grade tools in a fully isolated environment.
 
 ---
@@ -57,14 +59,25 @@ Internet
 
 ---
 
+## Requirements
+
+- Docker Engine 24+
+- Docker Compose v2
+- 8 GB RAM minimum (Wazuh indexer alone needs ~2 GB)
+- ~20 GB disk space for images and volumes
+
+---
+
 ## Getting started
 
+```bash
 git clone https://github.com/your-username/network-security-honeypot-lab
 cd network-security-honeypot-lab
 
 docker compose build
 docker compose up -d
 docker compose ps
+```
 
 Wazuh dashboard takes ~2 minutes to become available after startup.
 
@@ -74,17 +87,23 @@ Wazuh dashboard takes ~2 minutes to become available after startup.
 
 Spin up an attacker container on the DMZ network and connect to the Kippo honeypot:
 
+```bash
 docker run --rm -it --name attacker \
   --network network-security-honeypot-lab_dmz_net \
   ubuntu:20.04 bash
+```
 
 Inside the attacker container:
 
+```bash
 apt-get update -qq && apt-get install -y -qq openssh-client
+
 ssh -o StrictHostKeyChecking=no \
     -o KexAlgorithms=diffie-hellman-group-exchange-sha1 \
     root@10.10.0.99 -p 2222
+
 # password: root
+```
 
 Kippo accepts the connection and logs everything — credentials tried, commands run, files downloaded.
 
@@ -92,26 +111,37 @@ Kippo accepts the connection and logs everything — credentials tried, commands
 
 ## Checking logs
 
-# Kippo SSH honeypot
+**Kippo SSH honeypot**
+
+```bash
 docker logs honeypot-dmz
+docker logs honeypot-internal
+```
 
-# OpenCanary multi-protocol
+**OpenCanary multi-protocol**
+
+```bash
 docker logs opencanary
+```
 
-# Snare web honeypot
+**Snare web honeypot**
+
+```bash
 docker logs snare
 docker logs tanner
+```
 
 ---
 
 ## Wazuh dashboard
 
-http://localhost:8080
+Open `http://localhost:8080` in your browser.
 
 ---
 
 ## Project structure
 
+```
 .
 ├── docker-compose.yml
 └── config/
@@ -131,3 +161,10 @@ http://localhost:8080
     └── opencanary/
         ├── Dockerfile
         └── opencanary.conf
+```
+
+---
+
+## Disclaimer
+
+This environment is intentionally vulnerable. Do not expose any ports to the public internet. Intended for local lab and research use only.
